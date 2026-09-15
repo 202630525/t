@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Territorial.io Prototype</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+    body {
+      background-color: #121214;
+      color: #ffffff;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+    #ui-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 100%;
+      max-width: 900px;
+      padding: 10px;
+      gap: 10px;
+    }
+    #stats-bar {
+      display: flex;
+      justify-content: space-around;
+      width: 100%;
+      background: #1e1e24;
+      padding: 12px 20px;
+      border-radius: 8px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+      font-weight: bold;
+      font-size: 16px;
+    }
+    .stat-box span {
+      color: #4da6ff;
+    }
+    #canvas-wrapper {
+      position: relative;
+      border: 3px solid #2a2a35;
+      border-radius: 8px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.7);
+      background: #000;
+    }
+    canvas {
+      display: block;
+      image-rendering: pixelated; /* Crisp pixel rendering */
+      cursor: crosshair;
+    }
+    #controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      background: #1e1e24;
+      padding: 12px 20px;
+      border-radius: 8px;
+      gap: 15px;
+    }
+    .slider-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-grow: 1;
+    }
+    input[type=range] {
+      flex-grow: 1;
+      height: 8px;
+      border-radius: 5px;
+      background: #3a3a45;
+      outline: none;
+      accent-color: #ff4757;
+      cursor: pointer;
+    }
+    button {
+      background: #ff4757;
+      color: white;
+      border: none;
+      padding: 10px 24px;
+      font-size: 16px;
+      font-weight: bold;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+    }
+    button:hover {
+      background: #ff6b81;
+    }
+    button:active {
+      transform: scale(0.96);
+    }
+    #leaderboard {
+      position: absolute;
+      top: 15px;
+      right: 15px;
+      background: rgba(0, 0, 0, 0.65);
+      padding: 10px 15px;
+      border-radius: 6px;
+      font-size: 13px;
+      pointer-events: none;
+    }
+    #leaderboard h4 {
+      margin-bottom: 5px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #aaa;
+    }
+    .lb-entry {
+      display: flex;
+      justify-content: space-between;
+      gap: 15px;
+      margin-top: 3px;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="ui-container">
+    <div id="stats-bar">
+      <div class="stat-box">Troops: <span id="stat-troops">100</span></div>
+      <div class="stat-box">Land: <span id="stat-land">1</span></div>
+      <div class="stat-box">Interest: <span id="stat-interest">+5%</span></div>
+      <div class="stat-box">Cycle: <span id="stat-cycle">0</span></div>
+    </div>
+
+    <div id="canvas-wrapper">
+      <canvas id="gameCanvas" width="300" height="200" style="width: 900px; height: 600px;"></canvas>
+      <div id="leaderboard">
+        <h4>Leaderboard</h4>
+        <div id="lb-list"></div>
+      </div>
+    </div>
+
+    <div id="controls">
+      <div class="slider-group">
+        <label for="attackSlider">Attack Ratio:</label>
+        <input type="range" id="attackSlider" min="1" max="100" value="20">
+        <span id="sliderValue" style="width: 45px; font-weight: bold;">20%</span>
+      </div>
+      <button id="attackBtn">EXPAND / ATTACK</button>
+      <button id="resetBtn" style="background: #57606f;">RESET</button>
+    </div>
+  </div>
+
+  <script>
+    // --- MAP CONFIGURATION ---
+    const WIDTH = 300;
+    const HEIGHT = 200;
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const imgData = ctx.createImageData(WIDTH, HEIGHT);
+
+    // Grid states: 0 = Water, 1 = Neutral Land, >1 = Player/Bot ID
+    const map = new Uint8Array(WIDTH * HEIGHT);
+
+    // ID Constants
+    const WATER = 0;
+    const NEUTRAL = 1;
+    const PLAYER_ID = 2;
+
+    // Entity Definitions
+    let players = [];
+
+    // Color definitions [R, G, B]
+    const COLORS = {
+      [WATER]: [15, 25, 35],
+      [NEUTRAL]: [180, 185, 190],
+      [PLAYER_ID]: [235, 47, 60],     // Red (User)
+      3: [46, 134, 222],               // Blue Bot
+      4: [16, 172, 137],               // Green Bot
+      5: [255, 159, 26]                // Orange Bot
+    };
+
+    let gameCycle = 0;
+    let attackPercent = 20;
+
+    // UI Elements
+    const slider = document.getElementById('attackSlider');
+    const sliderVal = document.getElementById('sliderValue');
+    const attackBtn = document.getElementById('attackBtn');
+    const resetBtn = document.getElementById('resetBtn');
+
+    slider.addEventListener('input', (e) => {
+      attackPercent = parseInt(e.target.value);
+      sliderVal.textContent = attackPercent + '%';
+    });
+
+    attackBtn.addEventListener('click', () => attack(PLAYER_ID, attackPercent));
+    resetBtn.addEventListener('click', initGame);
+
+    // --- GAME INITIALIZATION ---
+    function initGame() {
+      gameCycle = 0;
+      players = [
+        { id: PLAYER_ID, name: "Player", troops: 100, land: 0, isBot: false },
+        { id: 3, name: "Bot Alpha", troops: 100, land: 0, isBot: true },
+        { id: 4, name: "Bot Beta", troops: 100, land: 0, isBot: true },
+        { id: 5, name: "Bot Gamma", troops: 100, land: 0, isBot: true }
+      ];
+
+      // 1. Generate Island Mask
+      const centerX = WIDTH / 2;
+      const centerY = HEIGHT / 2;
+      const maxRadius = Math.min(WIDTH, HEIGHT) * 0.45;
+
+      for (let y = 0; y < HEIGHT; y++) {
+        for (let x = 0; x < WIDTH; x++) {
+          const idx = y * WIDTH + x;
+          const dx = x - centerX;
+          const dy = y - centerY;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          // Circle island with a slight noise border effect
+          if (dist < maxRadius - (Math.sin(x * 0.05) * Math.cos(y * 0.05) * 8)) {
+            map[idx] = NEUTRAL;
+          } else {
+            map[idx] = WATER;
+          }
+        }
+      }
+
+      // 2. Spawn Players & Bots at random positions on land
+      players.forEach(p => {
+        let spawned = false;
+        while (!spawned) {
+          const rx = Math.floor(Math.random() * (WIDTH - 40)) + 20;
+          const ry = Math.floor(Math.random() * (HEIGHT - 40)) + 20;
+          const idx = ry * WIDTH + rx;
+
+          if (map[idx] === NEUTRAL) {
+            map[idx] = p.id;
+            p.land = 1;
+            spawned = true;
+          }
+        }
+      });
+
+      renderMap();
+      updateUI();
+    }
+
+    // --- MAP EXPANSION / ATTACK MECHANIC ---
+    function attack(attackerId, percentage) {
+      const p = players.find(player => player.id === attackerId);
+      if (!p || p.troops <= 10) return;
+
+      let troopsToDeploy = Math.floor(p.troops * (percentage / 100));
+      if (troopsToDeploy < 1) return;
+
+      // Find all border pixels owned by the attacker
+      let frontiers = [];
+      for (let y = 0; y < HEIGHT; y++) {
+        for (let x = 0; x < WIDTH; x++) {
+          const idx = y * WIDTH + x;
+          if (map[idx] === attackerId) {
+            // Check 4-directional neighbors
+            if (hasNeighborToConquer(x, y, attackerId)) {
+              frontiers.push({ x, y });
+            }
+          }
+        }
+      }
+
+      // Shuffle frontiers to simulate organic directional spread
+      frontiers.sort(() => Math.random() - 0.5);
+
+      // BFS outward expansion
+      let queue = [...frontiers];
+      while (queue.length > 0 && troopsToDeploy > 0) {
+        const curr = queue.shift();
+        const neighbors = getNeighbors(curr.x, curr.y);
+
+        for (let n of neighbors) {
+          const nIdx = n.y * WIDTH + n.x;
+          const targetOwner = map[nIdx];
+
+          if (targetOwner !== WATER && targetOwner !== attackerId) {
+            let cost = 1; // 1 troop cost for neutral land
+
+            // Defense multiplier if attacking another player/bot
+            if (targetOwner !== NEUTRAL) {
+              cost = 2;
+              const defender = players.find(d => d.id === targetOwner);
+              if (defender && defender.land > 0) {
+                defender.land--;
+              }
+            }
+
+            if (troopsToDeploy >= cost) {
+              troopsToDeploy -= cost;
+              p.troops -= cost;
+              map[nIdx] = attackerId;
+              p.land++;
+              queue.push(n);
+
+              if (troopsToDeploy <= 0) break;
+            }
+          }
+        }
+      }
+
+      renderMap();
+      updateUI();
+    }
+
+    function hasNeighborToConquer(x, y, myId) {
+      const neighbors = getNeighbors(x, y);
+      return neighbors.some(n => {
+        const owner = map[n.y * WIDTH + n.x];
+        return owner !== WATER && owner !== myId;
+      });
+    }
+
+    function getNeighbors(x, y) {
+      const res = [];
+      if (x > 0) res.push({ x: x - 1, y });
+      if (x < WIDTH - 1) res.push({ x: x + 1, y });
+      if (y > 0) res.push({ x, y: y - 1 });
+      if (y < HEIGHT - 1) res.push({ x, y: y + 1 });
+      return res;
+    }
+
+    // --- RENDER ENGINE ---
+    function renderMap() {
+      const data = imgData.data;
+      for (let i = 0; i < map.length; i++) {
+        const owner = map[i];
+        const rgb = COLORS[owner] || [250, 250, 250];
+        const pixelIdx = i * 4;
+
+        data[pixelIdx] = rgb[0];     // Red
+        data[pixelIdx + 1] = rgb[1]; // Green
+        data[pixelIdx + 2] = rgb[2]; // Blue
+        data[pixelIdx + 3] = 255;    // Alpha
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+
+    // --- INTEREST & ECONOMIC TICK LOOP ---
+    setInterval(() => {
+      gameCycle++;
+
+      players.forEach(p => {
+        if (p.land === 0) return;
+
+        // Interest logic: Troops grow exponentially relative to current troops,
+        // but interest ceiling is capped based on total land area owned.
+        const interestRate = 0.08; 
+        const maxTroopCapRatio = 100; // 1 land tile can support max 100 interest growth cap
+        
+        const interestAmount = Math.floor(p.troops * interestRate);
+        const maxCapacity = p.land * maxTroopCapRatio;
+
+        if (p.troops < maxCapacity) {
+          p.troops += Math.max(1, Math.min(interestAmount, maxCapacity - p.troops));
+        }
+
+        // Bot AI Action Routine
+        if (p.isBot && p.land > 0) {
+          // Bots attack if they accumulate sufficient troops
+          if (Math.random() < 0.4 && p.troops > 30) {
+            const botAttackPercent = Math.floor(Math.random() * 30) + 10;
+            attack(p.id, botAttackPercent);
+          }
+        }
+      });
+
+      updateUI();
+    }, 1000); // Ticks every 1 second
+
+    // --- UI UPDATES ---
+    function updateUI() {
+      const user = players.find(p => p.id === PLAYER_ID);
+      if (user) {
+        document.getElementById('stat-troops').textContent = Math.floor(user.troops).toLocaleString();
+        document.getElementById('stat-land').textContent = user.land.toLocaleString();
+        document.getElementById('stat-cycle').textContent = gameCycle;
+      }
+
+      // Leaderboard calculation
+      const sorted = [...players].sort((a, b) => b.land - a.land);
+      const lbContainer = document.getElementById('lb-list');
+      lbContainer.innerHTML = '';
+
+      sorted.forEach(p => {
+        const entry = document.createElement('div');
+        entry.className = 'lb-entry';
+        const rgb = COLORS[p.id];
+        entry.style.color = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+        entry.innerHTML = `<span>${p.name}</span> <span>${p.land} px</span>`;
+        lbContainer.appendChild(entry);
+      });
+    }
+
+    // Start Game
+    initGame();
+  </script>
+</body>
+</html>
